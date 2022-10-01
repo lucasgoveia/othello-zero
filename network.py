@@ -75,7 +75,7 @@ def out_block(layer: Layer) -> (Layer, Layer):
 
 
 def get_network():
-    input_layer = Input((8, 8, 41), dtype='float32')
+    input_layer = Input((8, 8, config.INPUT_PLANES_CNT), dtype='float32')
 
     # block 1 - Conv2d
     conv_layer = conv2d_block(input_layer)
