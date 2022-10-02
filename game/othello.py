@@ -89,15 +89,19 @@ def print_bitboard(bb: Bitboard):
 
 
 class Move:
-    def __init__(self, pos, player):
+    def __init__(self, pos):
         self.pos = pos
-        self.player = player
 
     def __str__(self):
         return MOVE_DISPLAY[self.pos]
 
     def __repr__(self):
         return self.__str__()
+
+
+class Outcome:
+    def __init__(self, winner: Player = None):
+        self.winner = winner
 
 
 class Board:
@@ -165,10 +169,10 @@ class Board:
         while moves_bb:
             sq = bb_scan_forward(moves_bb)
             moves_bb &= moves_bb - np.uint64(1)
-            moves.append(Move(sq, self.turn))
+            moves.append(Move(sq))
 
         if len(moves) == 0:
-            moves.append(Move(PASS_MOVE_CODE, self.turn))
+            moves.append(Move(PASS_MOVE_CODE))
 
         return moves
 
@@ -217,6 +221,20 @@ class Board:
         black = us if prev.turn == Player.Black else them
 
         self.bbs = [white, black]
+
+    def outcome(self):
+        if self.empty() == np.uint64(0) or self.pass_move_count >= 2:
+            white_cnt = bin(self.bbs[Player.White]).count('1')
+            black_cnt = bin(self.bbs[Player.Black]).count('1')
+
+            if white_cnt > black_cnt:
+                return Outcome(Player.White)
+            elif black_cnt > white_cnt:
+                return Outcome(Player.Black)
+            else:
+                return Outcome()
+
+        return None
 
 
 def search_contiguous(delta, us: Bitboard, them: Bitboard):

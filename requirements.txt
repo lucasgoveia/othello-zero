@@ -1,5 +1,7 @@
 numpy==1.23.3
-tensorflow-gpu==2.10.0
-tensorflow==2.10.0
-keras==2.10.0
+tensorflow-gpu~=2.6.0
+tensorflow~=2.6.0
+keras~=2.6.0
 pydot==1.4.2
+tables==3.7.0
+tqdm==4.64.1

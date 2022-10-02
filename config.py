@@ -9,6 +9,8 @@ EPOCHS = 10
 BATCH_SIZE = 128
 INPUT_PLANES_CNT = 25
 
+MCTS_NODES = 400
+
 # == Encode pos == 8 x 8 x 3
 # 8x8 for white
 # 8x8 for black
