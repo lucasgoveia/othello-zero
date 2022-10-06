@@ -11,7 +11,6 @@ def conv2d_block(input_layer: Layer) -> Layer:
         kernel_size=3,
         strides=1,
         padding='same',
-        data_format='channels_first',
         use_bias=False
     )(input_layer)
     bn = BatchNormalization()(cnv2d)
@@ -24,7 +23,6 @@ def res2d_block(layer: Layer, i) -> Layer:
         kernel_size=3,
         strides=1,
         padding='same',
-        data_format='channels_first',
         use_bias=False
     )(layer)
     bn_1 = BatchNormalization()(cnv2d_1)
@@ -34,7 +32,6 @@ def res2d_block(layer: Layer, i) -> Layer:
         kernel_size=3,
         strides=1,
         padding='same',
-        data_format='channels_first',
         use_bias=False,
     )(relu_1)
     bn_2 = BatchNormalization()(cnv2d_2)
@@ -48,7 +45,6 @@ def out_block(layer: Layer) -> (Layer, Layer):
         kernel_size=1,
         strides=1,
         padding='same',
-        data_format='channels_first',
         use_bias=False
     )(layer)
     policy_bn = BatchNormalization()(policy_conv)
@@ -61,7 +57,6 @@ def out_block(layer: Layer) -> (Layer, Layer):
         kernel_size=1,
         strides=1,
         padding='same',
-        data_format='channels_first',
         use_bias=False,
     )(layer)
     value_bn = BatchNormalization()(value_conv)
@@ -81,7 +76,7 @@ def get_network():
     conv_layer = conv2d_block(input_layer)
 
     res_layer = conv_layer
-    for i in range(0, 9):
+    for i in range(config.RESIDUAL_BLOCKS_CNT):
         res_layer = res2d_block(res_layer, i)
 
     policy, value = out_block(res_layer)
@@ -99,5 +94,5 @@ if __name__ == "__main__":
         optimizer=tf.keras.optimizers.Adam(learning_rate=config.LEARNING_RATE),
         loss=['categorical_crossentropy', 'MSE'],
     )
-    model.save('models/random_model.keras')
+    model.save('models/nn_v0.keras')
     print(model.summary())

@@ -1,5 +1,4 @@
 import math
-import random
 
 import numpy as np
 
@@ -8,131 +7,161 @@ import game.othello as othello
 import nn_util
 
 
-class Edge:
-    def __init__(self, move, parent_node):
-        self.parent_node = parent_node
-        self.move = move
-        self.N = 0
-        self.W = 0
-        self.Q = 0
-        self.P = 0
+def normalize_with_mask(x, mask):
+    x_masked = np.multiply(x, mask)
+    x_normalized = x_masked / np.sum(x_masked)
+    return x_normalized
+
+
+def player_val(player: othello.Player):
+    if player == othello.Player.White:
+        return 1.0
+    else:
+        return -1.0
+
+
+class FakeNode:
+    def __init__(self):
+        self.parent = None
+        self.edge_N = np.zeros([config.MOVES_CNT], dtype=np.float)
+        self.edge_W = np.zeros([config.MOVES_CNT], dtype=np.float)
 
 
 class Node:
-    def __init__(self, board: othello.Board, parent_edge: Edge):
+    def __init__(self, parent, move: othello.Move, board: othello.Board = None):
+        self.parent = parent
+        self.expanded = False
+        self.move = move
         self.board = board
-        self.parent_edge = parent_edge
-        self.child_edge_node = []
+        self.legal_moves = nn_util.encode_moves_bb(self.board.legal_moves_bb())
+        self.child_nodes = {}
+        self.is_game_root = False
+        self.is_search_root = False
+        self.is_terminal = False
+        self.pi = np.zeros([config.MOVES_CNT], dtype=np.float)
+        self.edge_N = np.zeros([config.MOVES_CNT], dtype=np.float)
+        self.edge_W = np.zeros([config.MOVES_CNT], dtype=np.float)
+        self.edge_P = np.zeros([config.MOVES_CNT], dtype=np.float)
 
-    def expand(self, network):
-        moves = self.board.legal_moves()
-        for m in moves:
-            child_board = self.board.__copy__()
-            child_board.apply_move(m)
-            child_edge = Edge(m, self)
-            child_node = Node(child_board, child_edge)
-            self.child_edge_node.append((child_edge, child_node))
+    @property
+    def edge_Q(self):
+        return self.edge_W / (self.edge_N + (self.edge_N == 0))
 
-        q = network.predict(np.array([nn_util.board_to_nn_input(self.board)]))
-        prob_sum = 0.
+    @property
+    def self_N(self):
+        return self.parent.edge_N[self.move.pos]
 
-        for (edge, node) in self.child_edge_node:
-            edge.P = q[0][0][edge.move.pos]
-            prob_sum += edge.P
-        for edge, _ in self.child_edge_node:
-            edge.P /= prob_sum
-        v = q[1][0][0]
-        return v
+    @self_N.setter
+    def self_N(self, n):
+        self.parent.edge_N[self.move.pos] = n
 
-    def is_leaf_node(self):
-        return self.child_edge_node == []
+    @property
+    def edge_U(self):
+        return 1.0 * self.edge_P * math.sqrt(max(1, self.self_N)) / (1 + self.edge_N)
+
+    @property
+    def edge_U_with_noise(self):
+        noise = normalize_with_mask(np.random.dirichlet([config.NOISE_ALPHA] * config.MOVES_CNT), self.legal_moves)
+        p_with_noise = self.edge_P * (1 - config.NOISE_WEIGHT) + noise * config.NOISE_WEIGHT
+        return config.C_PUCT * p_with_noise * math.sqrt(max(1, self.self_N)) / (1 + self.edge_N)
+
+    @property
+    def edge_Q_plus_U(self):
+        if self.is_search_root:
+            return self.edge_Q * player_val(self.board.turn) + self.edge_U_with_noise + self.legal_moves * 1000
+        else:
+            return self.edge_Q * player_val(self.board.turn) + self.edge_U + self.legal_moves * 1000
+
+    @property
+    def self_W(self):
+        return self.parent.edge_W[self.move.pos]
+
+    @self_W.setter
+    def self_W(self, w):
+        self.parent.edge_W[self.move.pos] = w
+
+    def to_features(self):
+        features = np.zeros([8, 8, config.INPUT_PLANES_CNT]).astype(np.float)
+        current = self
+        for i in range(config.HISTORY_CNT + 1):
+            nn_util.encode_bitboard(current.board.bbs[othello.Player.White], features, 2 * i)
+            nn_util.encode_bitboard(current.board.bbs[othello.Player.Black], features, 2 * i + 1)
+            if current.is_game_root:
+                break
+            current = current.parent
+
+        if self.board.turn == othello.Player.White:
+            features[:, :, 12] = 1
+
+        return features
 
 
 class MCTS:
-    def __init__(self, network):
-        self.network = network
-        self.root_node = None
-        self.tau = 1.0
-        self.c_puct = 1.0
+    def __init__(self, nn):
+        self.nn = nn
 
-    def utc_value(self, edge, parent_N):
-        return self.c_puct * edge.P * (math.sqrt(parent_N) / (1 + edge.N))
+    def select(self, nodes):
+        best_nodes_batch = [None] * len(nodes)
+        for i, node in enumerate(nodes):
+            current = node
+            while current.expanded:
+                best_edge = np.argmax(current.edge_Q_plus_U)
+                if best_edge not in current.child_nodes:
+                    chilld_board = current.board.__copy__()
+                    chilld_board.apply_move(othello.Move(best_edge))
+                    current.child_nodes[best_edge] = Node(current, othello.Move(best_edge), chilld_board)
+                if current.is_terminal:
+                    break
+                if current.board.outcome() is not None:
+                    current.is_terminal = True
+                    break
 
-    def select(self, node: Node):
-        if node.is_leaf_node():
-            return node
+                current = current.child_nodes[best_edge]
+            best_nodes_batch[i] = current
+        return best_nodes_batch
 
-        max_utc_child = None
-        max_utc_value = -1000000000.
-        for edge, child_node in node.child_edge_node:
-            utc_val = self.utc_value(edge, edge.parent_node.parent_edge.N)
-            val = edge.Q
+    def expand_and_evaluate(self, nodes_batch: [Node]):
+        features_batch = np.zeros((len(nodes_batch), 8, 8, 13), dtype=np.float)
+        for i, node in enumerate(nodes_batch):
+            node.expanded = True
+            features_batch[i] = node.to_features()
 
-            if edge.parent_node.board.turn == othello.Player.Black:
-                val = -edge.Q
+        qs = self.nn.predict(features_batch, batch_size=len(nodes_batch))
+        p_batch = qs[0]
+        v_batch = qs[1]
 
-            utc_val_child = val + utc_val
+        for i, node in enumerate(nodes_batch):
+            node.edge_P = normalize_with_mask(p_batch[i], node.legal_moves)
 
-            if utc_val_child > max_utc_value:
-                max_utc_child = child_node
-                max_utc_value = utc_val_child
+        return v_batch
 
-        all_best_childs = []
-        for edge, child_node in node.child_edge_node:
-            utc_val = self.utc_value(edge, edge.parent_node.parent_edge.N)
-            val = edge.Q
+    def backpropagate(self, nodes_batch, v_batch):
+        for i, node in enumerate(nodes_batch):
+            current = node
+            while True:
+                current.self_N += 1
+                current.self_W += v_batch[i]
+                if current.is_search_root:
+                    break
+                current = current.parent
 
-            if edge.parent_node.board.turn == othello.Player.Black:
-                val = -edge.Q
+    def search(self, nodes):
+        best_nodes_batch = self.select(nodes)
+        v_batch = self.expand_and_evaluate(best_nodes_batch)
+        self.backpropagate(best_nodes_batch, v_batch)
 
-            utc_val_child = val + utc_val
-            if utc_val_child == max_utc_child:
-                all_best_childs.append(child_node)
-
-        if max_utc_child is None:
-            raise ValueError("could not identify child with best uct value")
-
-        if len(all_best_childs) > 1:
-            idx = random.randint(0, len(all_best_childs) - 1)
-            return self.select(all_best_childs[idx])
-        else:
-            return self.select(max_utc_child)
-
-    def expand_and_evaluate(self, node: Node):
-        outcome = node.board.outcome()
-        if outcome is not None:
-            v = 0.0
-            if outcome.winner == othello.Player.White:
-                v = 1.0
-            elif outcome.winner == othello.Player.Black:
-                v = -1.0
-            self.backpropagate(v, node.parent_edge)
-            return
-
-        v = node.expand(self.network)
-        self.backpropagate(v, node.parent_edge)
-
-    def backpropagate(self, v, edge):
-        edge.N += 1
-        edge.W = edge.W + v
-        edge.Q = edge.W / edge.N
-        if edge.parent_node is not None:
-            if edge.parent_node.parent_edge is not None:
-                self.backpropagate(v, edge.parent_node.parent_edge)
-
-    def search(self, root_node):
-        self.root_node = root_node
-        _ = self.root_node.expand(self.network)
+    def alpha(self, nodes):
         for i in range(config.MCTS_NODES):
-            selected_node = self.select(root_node)
-            self.expand_and_evaluate(selected_node)
+            self.search(nodes)
 
-        N_sum = 0
-        move_props = []
-        for edge, _ in root_node.child_edge_node:
-            N_sum += edge.N
-        for (edge, node) in root_node.child_edge_node:
-            prob = (edge.N ** (1 / self.tau)) / (N_sum ** (1 / self.tau))
-            move_props.append((edge.move, prob, edge.N, edge.Q))
-
-        return move_props
+        pi_batch = np.zeros([len(nodes), config.MOVES_CNT], dtype=np.float)
+        for i, node in enumerate(nodes):
+            n_with_temperature = node.edge_N ** (1 / config.TAU)
+            sum_n_with_temperature = np.sum(n_with_temperature)
+            if sum_n_with_temperature == 0:
+                node.pi = np.zeros([config.MOVES_CNT], dtype=np.float)
+                node.pi[othello.PASS_MOVE] = 1
+            else:
+                node.pi = n_with_temperature / sum_n_with_temperature
+            pi_batch[i] = node.pi
+        return pi_batch

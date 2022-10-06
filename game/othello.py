@@ -54,7 +54,7 @@ DELTAS = [
     (CORNER_MASK, lambda bb: bb << np.uint64(7)),
 ]
 
-PASS_MOVE_CODE = 64
+PASS_MOVE = 64
 
 MOVE_DISPLAY = ["a1", "b1", "c1", "d1", "e1", "f1", "g1", "h1",
                 "a2", "b2", "c2", "d2", "e2", "f2", "g2", "h2",
@@ -111,7 +111,6 @@ class Board:
         self.bbs = [white, black]
         self.turn = Player.Black
         self.pass_move_count = 1
-        self.prev = None
 
     def __unicode__(self):
         board_repr = '   +___+___+___+___+___+___+___+___+\n'
@@ -172,14 +171,13 @@ class Board:
             moves.append(Move(sq))
 
         if len(moves) == 0:
-            moves.append(Move(PASS_MOVE_CODE))
+            moves.append(Move(PASS_MOVE))
 
         return moves
 
     def __copy__(self):
         new = Board()
 
-        new.prev = self.prev
         new.turn = self.turn
         new.bbs = self.bbs
         new.pass_move_count = self.pass_move_count
@@ -187,15 +185,12 @@ class Board:
         return new
 
     def apply_move(self, mv: Move):
-        if mv.pos == PASS_MOVE_CODE:
-            copy = self.__copy__()
-
-            self.prev = copy
+        if mv.pos == PASS_MOVE:
             self.turn = self.turn.other()
             self.bbs = self.bbs
             self.pass_move_count = self.pass_move_count + 1
 
-            return copy
+            return
 
         us = self.us()
         them = self.them()
@@ -211,14 +206,13 @@ class Board:
         us |= flipped_stones | bitmove
         them &= ~flipped_stones
 
-        prev = self.__copy__()
+        move_player = self.turn
 
-        self.prev = prev
         self.pass_move_count = 0
-        self.turn = prev.turn.other()
+        self.turn = move_player.other()
 
-        white = us if prev.turn == Player.White else them
-        black = us if prev.turn == Player.Black else them
+        white = us if move_player == Player.White else them
+        black = us if move_player == Player.Black else them
 
         self.bbs = [white, black]
 

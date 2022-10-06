@@ -16,4 +16,4 @@ while board.pass_move_count < 2:
 
     test = nn_util.board_to_nn_input(board)
     test = test.transpose()
-
+    print(test)
