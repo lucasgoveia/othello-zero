@@ -88,15 +88,7 @@ def print_bitboard(bb: Bitboard):
     print(bb_repr)
 
 
-class Move:
-    def __init__(self, pos):
-        self.pos = pos
-
-    def __str__(self):
-        return MOVE_DISPLAY[self.pos]
-
-    def __repr__(self):
-        return self.__str__()
+Move = int
 
 
 class Outcome:
@@ -168,10 +160,10 @@ class Board:
         while moves_bb:
             sq = bb_scan_forward(moves_bb)
             moves_bb &= moves_bb - np.uint64(1)
-            moves.append(Move(sq))
+            moves.append(sq)
 
         if len(moves) == 0:
-            moves.append(Move(PASS_MOVE))
+            moves.append(PASS_MOVE)
 
         return moves
 
@@ -179,13 +171,13 @@ class Board:
         new = Board()
 
         new.turn = self.turn
-        new.bbs = self.bbs
+        new.bbs = self.bbs.copy()
         new.pass_move_count = self.pass_move_count
 
         return new
 
     def apply_move(self, mv: Move):
-        if mv.pos == PASS_MOVE:
+        if mv == PASS_MOVE:
             self.turn = self.turn.other()
             self.bbs = self.bbs
             self.pass_move_count = self.pass_move_count + 1
@@ -195,7 +187,7 @@ class Board:
         us = self.us()
         them = self.them()
 
-        bitmove = np.uint64(1 << mv.pos)
+        bitmove = np.uint64(1 << mv)
         flipped_stones = np.uint64(0)
 
         for delta in DELTAS:

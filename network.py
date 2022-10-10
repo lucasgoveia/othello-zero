@@ -1,98 +1,60 @@
-from keras import Model
-from keras.layers import *
+import numpy as np
 import tensorflow as tf
 
 import config
 
 
-def conv2d_block(input_layer: Layer) -> Layer:
-    cnv2d = Conv2D(
-        filters=64,
-        kernel_size=3,
-        strides=1,
-        padding='same',
-        use_bias=False
-    )(input_layer)
-    bn = BatchNormalization()(cnv2d)
-    return ReLU(name='cnv2d')(bn)
-
-
-def res2d_block(layer: Layer, i) -> Layer:
-    cnv2d_1 = Conv2D(
-        filters=64,
-        kernel_size=3,
-        strides=1,
-        padding='same',
-        use_bias=False
-    )(layer)
-    bn_1 = BatchNormalization()(cnv2d_1)
-    relu_1 = ReLU()(bn_1)
-    cnv2d_2 = Conv2D(
-        filters=64,
-        kernel_size=3,
-        strides=1,
-        padding='same',
-        use_bias=False,
-    )(relu_1)
-    bn_2 = BatchNormalization()(cnv2d_2)
-
-    return ReLU(name=f'res2d_{i}')(layer + bn_2)
-
-
-def out_block(layer: Layer) -> (Layer, Layer):
-    policy_conv = Conv2D(
-        filters=2,
-        kernel_size=1,
-        strides=1,
-        padding='same',
-        use_bias=False
-    )(layer)
-    policy_bn = BatchNormalization()(policy_conv)
-    policy_relu = ReLU()(policy_bn)
-    policy_flatten = Flatten()(policy_relu)
-    policy_out = Dense(config.MOVES_CNT, name='policyHead', activation='softmax')(policy_flatten)
-
-    value_conv = Conv2D(
-        filters=1,
-        kernel_size=1,
-        strides=1,
-        padding='same',
-        use_bias=False,
-    )(layer)
-    value_bn = BatchNormalization()(value_conv)
-    value_relu = ReLU()(value_bn)
-    value_flatten = Flatten()(value_relu)
-    value_out1 = Dense(64, activation='relu')(value_flatten)
-    value_out2 = Dense(1, activation='tanh', name='valueHead')(Flatten()(value_out1))
-    # Activation(activation='tanh')(value_out2)
-
-    return policy_out, value_out2
-
-
 def get_network():
-    input_layer = Input((8, 8, config.INPUT_PLANES_CNT), dtype='float32')
+    input = tf.keras.layers.Input(shape=(8, 8, config.INPUT_PLANES_CNT), dtype=np.float32)
 
-    # block 1 - Conv2d
-    conv_layer = conv2d_block(input_layer)
+    l2const = 1e-4
+    layer = input
+    layer = tf.keras.layers.Conv2D(128, (3, 3), padding="same", kernel_regularizer=tf.keras.regularizers.l2(l2const))(
+        layer)
+    layer = tf.keras.layers.BatchNormalization()(layer)
+    layer = tf.keras.layers.Activation("relu")(layer)
+    for _ in range(config.RESIDUAL_BLOCKS_CNT):
+        res = layer
+        layer = tf.keras.layers.Conv2D(128, (3, 3), padding="same",
+                                       kernel_regularizer=tf.keras.regularizers.l2(l2const))(layer)
+        layer = tf.keras.layers.BatchNormalization()(layer)
+        layer = tf.keras.layers.Activation("relu")(layer)
+        layer = tf.keras.layers.Conv2D(128, (3, 3), padding="same",
+                                       kernel_regularizer=tf.keras.regularizers.l2(l2const))(layer)
+        layer = tf.keras.layers.BatchNormalization()(layer)
+        layer = tf.keras.layers.Add()([layer, res])
+        layer = tf.keras.layers.Activation("relu")(layer)
 
-    res_layer = conv_layer
-    for i in range(config.RESIDUAL_BLOCKS_CNT):
-        res_layer = res2d_block(res_layer, i)
+    vhead = layer
+    vhead = tf.keras.layers.Conv2D(1, (1, 1), kernel_regularizer=tf.keras.regularizers.l2(l2const))(vhead)
+    vhead = tf.keras.layers.BatchNormalization()(vhead)
+    vhead = tf.keras.layers.Activation("relu")(vhead)
+    vhead = tf.keras.layers.Flatten()(vhead)
+    vhead = tf.keras.layers.Dense(64, kernel_regularizer=tf.keras.regularizers.l2(l2const))(vhead)
+    vhead = tf.keras.layers.Activation("relu")(vhead)
+    vhead = tf.keras.layers.Dense(1)(vhead)
+    vhead = tf.keras.layers.Activation("tanh", name="vh")(vhead)
 
-    policy, value = out_block(res_layer)
+    phead = layer
+    phead = tf.keras.layers.Conv2D(2, (1, 1), kernel_regularizer=tf.keras.regularizers.l2(l2const))(phead)
+    phead = tf.keras.layers.BatchNormalization()(phead)
+    phead = tf.keras.layers.Activation("relu")(phead)
+    phead = tf.keras.layers.Flatten()(phead)
+    phead = tf.keras.layers.Dense(config.MOVES_CNT)(phead)
+    phead = tf.keras.layers.Activation("softmax", name="ph")(phead)
 
-    return Model(input_layer, [policy, value])
+    model = tf.keras.models.Model(inputs=[input], outputs=[phead, vhead])
+    return model
 
 
 if __name__ == "__main__":
     model = get_network()
 
-    policy_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
-    value_loss = 'mean_squared_error'
-
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=config.LEARNING_RATE),
-        loss=['categorical_crossentropy', 'MSE'],
+        optimizer=tf.keras.optimizers.Adadelta(),
+        loss=[tf.keras.losses.categorical_crossentropy, tf.keras.losses.mean_squared_error],
+        loss_weights=[0.5, 0.5],
+        metrics=["accuracy"]
     )
     model.save('models/nn_v0.keras')
     print(model.summary())

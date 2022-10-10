@@ -28,11 +28,17 @@ class FakeNode:
 
 
 class Node:
-    def __init__(self, parent, move: othello.Move, board: othello.Board = None):
+    def __init__(self, parent, move: othello.Move, player: othello.Player, board: othello.Board = None):
         self.parent = parent
         self.expanded = False
         self.move = move
-        self.board = board
+        self.player = player
+
+        new_board = board if board is not None else self.parent.board.__copy__()
+        if board is None:
+            new_board.apply_move(move)
+
+        self.board = new_board
         self.legal_moves = nn_util.encode_moves_bb(self.board.legal_moves_bb())
         self.child_nodes = {}
         self.is_game_root = False
@@ -49,15 +55,15 @@ class Node:
 
     @property
     def self_N(self):
-        return self.parent.edge_N[self.move.pos]
+        return self.parent.edge_N[self.move]
 
     @self_N.setter
     def self_N(self, n):
-        self.parent.edge_N[self.move.pos] = n
+        self.parent.edge_N[self.move] = n
 
     @property
     def edge_U(self):
-        return 1.0 * self.edge_P * math.sqrt(max(1, self.self_N)) / (1 + self.edge_N)
+        return config.C_PUCT * self.edge_P * math.sqrt(max(1, self.self_N)) / (1 + self.edge_N)
 
     @property
     def edge_U_with_noise(self):
@@ -67,18 +73,18 @@ class Node:
 
     @property
     def edge_Q_plus_U(self):
-        if self.is_search_root:
-            return self.edge_Q * player_val(self.board.turn) + self.edge_U_with_noise + self.legal_moves * 1000
+        if self.is_game_root:
+            return self.edge_Q * player_val(self.player) + self.edge_U_with_noise + self.legal_moves * 1000
         else:
-            return self.edge_Q * player_val(self.board.turn) + self.edge_U + self.legal_moves * 1000
+            return self.edge_Q * player_val(self.player) + self.edge_U + self.legal_moves * 1000
 
     @property
     def self_W(self):
-        return self.parent.edge_W[self.move.pos]
+        return self.parent.edge_W[self.move]
 
     @self_W.setter
     def self_W(self, w):
-        self.parent.edge_W[self.move.pos] = w
+        self.parent.edge_W[self.move] = w
 
     def to_features(self):
         features = np.zeros([8, 8, config.INPUT_PLANES_CNT]).astype(np.float)
@@ -97,8 +103,9 @@ class Node:
 
 
 class MCTS:
-    def __init__(self, nn):
+    def __init__(self, nn, nodes_cnt):
         self.nn = nn
+        self.nodes_cnt = nodes_cnt
 
     def select(self, nodes):
         best_nodes_batch = [None] * len(nodes)
@@ -107,9 +114,7 @@ class MCTS:
             while current.expanded:
                 best_edge = np.argmax(current.edge_Q_plus_U)
                 if best_edge not in current.child_nodes:
-                    chilld_board = current.board.__copy__()
-                    chilld_board.apply_move(othello.Move(best_edge))
-                    current.child_nodes[best_edge] = Node(current, othello.Move(best_edge), chilld_board)
+                    current.child_nodes[best_edge] = Node(current, best_edge, current.player.other())
                 if current.is_terminal:
                     break
                 if current.board.outcome() is not None:
@@ -117,6 +122,7 @@ class MCTS:
                     break
 
                 current = current.child_nodes[best_edge]
+
             best_nodes_batch[i] = current
         return best_nodes_batch
 
@@ -151,7 +157,7 @@ class MCTS:
         self.backpropagate(best_nodes_batch, v_batch)
 
     def alpha(self, nodes):
-        for i in range(config.MCTS_NODES):
+        for i in range(self.nodes_cnt):
             self.search(nodes)
 
         pi_batch = np.zeros([len(nodes), config.MOVES_CNT], dtype=np.float)
